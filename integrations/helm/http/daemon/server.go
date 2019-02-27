@@ -4,19 +4,24 @@ import (
 	"context"
 	"fmt"
 	"github.com/go-kit/kit/log"
+	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/weaveworks/flux/integrations/helm/api"
+	transport "github.com/weaveworks/flux/integrations/helm/http"
 	"net/http"
 	"time"
 )
 
 // ListenAndServe starts a HTTP server instrumented with Prometheus on the specified address
-func ListenAndServe(listenAddr string, logger log.Logger, stopCh <-chan struct{}) {
+func ListenAndServe(listenAddr string, apiServer api.Server, logger log.Logger, stopCh <-chan struct{}) {
 	mux := http.DefaultServeMux
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+	handler := NewHandler(apiServer, transport.NewRouter())
+	mux.Handle("/api/", http.StripPrefix("/api", handler))
 
 	srv := &http.Server{
 		Addr:         listenAddr,
@@ -45,4 +50,21 @@ func ListenAndServe(listenAddr string, logger log.Logger, stopCh <-chan struct{}
 	} else {
 		logger.Log("info", "HTTP server stopped")
 	}
+}
+
+func NewHandler(s api.Server, r *mux.Router) http.Handler {
+	handle := HTTPServer{s}
+	r.Get(transport.SyncGit).HandlerFunc(handle.SyncGit)
+	return r
+}
+
+type HTTPServer struct {
+	server api.Server
+}
+
+func (s HTTPServer) SyncGit(w http.ResponseWriter, r *http.Request) {
+	go s.server.SyncMirrors()
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
